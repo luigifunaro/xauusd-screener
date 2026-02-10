@@ -1,0 +1,18 @@
+{
+  "name": "xauusd-screener",
+  "version": "1.0.0",
+  "description": "XAUUSD multi-timeframe screener with TradingView charts and automatic screenshot capture",
+  "main": "run.js",
+  "scripts": {
+    "start": "node run.js",
+    "mcp": "node src/mcp-server.mjs",
+    "mcp:http": "node src/mcp-server-http.mjs",
+    "dashboard": "open src/dashboard/index.html || xdg-open src/dashboard/index.html",
+    "postinstall": "npx playwright install chromium"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "playwright": "^1.40.0",
+    "zod": "^3.24.0"
+  }
+}
