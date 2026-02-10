@@ -45,10 +45,13 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-function checkAuth(req, res) {
+function checkAuth(req, res, url) {
   if (!AUTH_TOKEN) return true;
+  // Accept token from Authorization header or ?token= query parameter
   const header = req.headers["authorization"];
   if (header === `Bearer ${AUTH_TOKEN}`) return true;
+  const queryToken = url.searchParams.get("token");
+  if (queryToken === AUTH_TOKEN) return true;
   sendJson(res, 401, {
     jsonrpc: "2.0",
     error: { code: -32000, message: "Unauthorized" },
@@ -64,7 +67,7 @@ const httpServer = http.createServer(async (req, res) => {
     return;
   }
 
-  if (!checkAuth(req, res)) return;
+  if (!checkAuth(req, res, url)) return;
 
   const method = req.method;
 
