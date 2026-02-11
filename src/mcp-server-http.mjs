@@ -1,52 +1,63 @@
+import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { registerTools } from "./mcp-tools.mjs";
 
+const require = createRequire(import.meta.url);
+const capture = require("./capture.js");
+const config = require("./config.js");
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.MCP_PORT || "3001", 10);
 const AUTH_TOKEN = process.env.MCP_AUTH_TOKEN;
-const SESSION_TTL_MS = parseInt(process.env.MCP_SESSION_TTL || "600000", 10); // 10 min default
+const SESSION_TTL_MS = parseInt(process.env.MCP_SESSION_TTL || "600000", 10);
+const BASE_URL = (process.env.REST_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
+
+const SCREENSHOTS_DIR = path.resolve(__dirname, "..", "screenshots");
+fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
 
 if (!AUTH_TOKEN) {
   console.error("[mcp-http] WARNING: MCP_AUTH_TOKEN not set — server is unprotected!");
 }
 
-// Session map: sessionId -> { transport, server, lastActivity }
+// ── MCP session management ─────────────────────────────────────────
+
 const sessions = new Map();
 
-// Reap idle sessions every 60s
 setInterval(() => {
   const now = Date.now();
   for (const [sid, session] of sessions) {
     if (now - session.lastActivity > SESSION_TTL_MS) {
       console.error(`[mcp-http] Reaping idle session: ${sid} (inactive ${Math.round((now - session.lastActivity) / 1000)}s)`);
-      try {
-        session.transport.close();
-      } catch {}
+      try { session.transport.close(); } catch {}
       sessions.delete(sid);
     }
   }
 }, 60_000);
 
-function createServer() {
-  const server = new McpServer({
-    name: "xauusd-screener",
-    version: "1.0.0",
-  });
+function createMcpServer() {
+  const server = new McpServer({ name: "xauusd-screener", version: "1.0.0" });
   registerTools(server);
   return server;
 }
 
-/** Read full request body and parse as JSON. */
+// ── helpers ─────────────────────────────────────────────────────────
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
       try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString()));
+        const raw = Buffer.concat(chunks).toString();
+        resolve(raw ? JSON.parse(raw) : {});
       } catch (e) {
         reject(new Error("Invalid JSON body"));
       }
@@ -56,13 +67,17 @@ function readBody(req) {
 }
 
 function sendJson(res, status, body) {
-  res.writeHead(status, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(body));
+  const payload = JSON.stringify(body);
+  res.writeHead(status, {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": "*",
+    "Content-Length": Buffer.byteLength(payload),
+  });
+  res.end(payload);
 }
 
 function checkAuth(req, res, url) {
   if (!AUTH_TOKEN) return true;
-  // Accept token from Authorization header or ?token= query parameter
   const header = req.headers["authorization"];
   if (header === `Bearer ${AUTH_TOKEN}`) return true;
   const queryToken = url.searchParams.get("token");
@@ -75,18 +90,201 @@ function checkAuth(req, res, url) {
   return false;
 }
 
+// ── OpenAPI schema (for ChatGPT Actions) ────────────────────────────
+
+const OPENAPI_SCHEMA = {
+  openapi: "3.1.0",
+  info: {
+    title: "XAUUSD Chart Screener",
+    description: "Cattura screenshot multi-timeframe del grafico XAUUSD da TradingView con indicatori SMA/EMA",
+    version: "1.0.0",
+  },
+  servers: [{ url: BASE_URL }],
+  paths: {
+    "/capture-charts": {
+      post: {
+        operationId: "captureCharts",
+        summary: "Cattura screenshot dei grafici XAUUSD su uno o più timeframe",
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  timeframes: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                      enum: config.timeframes.map((t) => t.filename),
+                    },
+                    description: "Timeframe da catturare (es. 5M, 15M, 30M, 1H, 4H). Ometti per catturare tutti.",
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: "Screenshot catturati con successo",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    symbol: { type: "string" },
+                    studies: { type: "array", items: { type: "string" } },
+                    charts: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          timeframe: { type: "string" },
+                          label: { type: "string" },
+                          image_url: { type: "string", format: "uri" },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          500: {
+            description: "Errore durante la cattura",
+            content: {
+              "application/json": {
+                schema: { type: "object", properties: { error: { type: "string" } } },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/config": {
+      get: {
+        operationId: "getConfig",
+        summary: "Restituisce la configurazione corrente (simbolo, timeframe, studi)",
+        responses: {
+          200: {
+            description: "Configurazione corrente",
+            content: { "application/json": { schema: { type: "object" } } },
+          },
+        },
+      },
+    },
+  },
+};
+
+// ── HTTP server ─────────────────────────────────────────────────────
+
 const httpServer = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
-  if (url.pathname !== "/mcp") {
+  const pathname = url.pathname;
+  const method = req.method;
+
+  // CORS preflight
+  if (method === "OPTIONS") {
+    res.writeHead(204, {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization, mcp-session-id",
+    });
+    res.end();
+    return;
+  }
+
+  // ── GET /openapi.json — no auth needed ────────────────────────────
+  if (pathname === "/openapi.json" && method === "GET") {
+    sendJson(res, 200, OPENAPI_SCHEMA);
+    return;
+  }
+
+  // ── GET /screenshots/:filename — serve images, no auth ────────────
+  if (pathname.startsWith("/screenshots/") && method === "GET") {
+    const filename = path.basename(pathname);
+    const filePath = path.join(SCREENSHOTS_DIR, filename);
+    if (!fs.existsSync(filePath)) {
+      sendJson(res, 404, { error: "Image not found" });
+      return;
+    }
+    const data = fs.readFileSync(filePath);
+    res.writeHead(200, {
+      "Content-Type": "image/png",
+      "Content-Length": data.length,
+      "Cache-Control": "public, max-age=300",
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.end(data);
+    return;
+  }
+
+  // ── auth required below ───────────────────────────────────────────
+  if (!checkAuth(req, res, url)) return;
+
+  // ── GET /config — REST endpoint ───────────────────────────────────
+  if (pathname === "/config" && method === "GET") {
+    sendJson(res, 200, config);
+    return;
+  }
+
+  // ── POST /capture-charts — REST endpoint ──────────────────────────
+  if (pathname === "/capture-charts" && method === "POST") {
+    let body;
+    try {
+      body = await readBody(req);
+    } catch {
+      sendJson(res, 400, { error: "Invalid JSON body" });
+      return;
+    }
+
+    const { timeframes } = body;
+    console.error(`[rest] capture-charts called, timeframes=${timeframes || "all"}`);
+
+    try {
+      const files = await capture({
+        timeframes,
+        viewport: { width: 1280, height: 800 },
+        returnBuffers: false,
+      });
+
+      const charts = files.map((filePath) => {
+        const fname = path.basename(filePath);
+        const parts = fname.split("_");
+        const tf = parts[1] || "";
+        const tfConfig = config.timeframes.find(
+          (t) => t.filename.toUpperCase() === tf.toUpperCase()
+        );
+        return {
+          timeframe: tf,
+          label: tfConfig ? tfConfig.label : tf,
+          image_url: `${BASE_URL}/screenshots/${fname}`,
+        };
+      });
+
+      sendJson(res, 200, {
+        symbol: config.symbol,
+        studies: config.studies.map((s) => `${s.id} (length=${s.inputs.length})`),
+        charts,
+      });
+    } catch (err) {
+      console.error(`[rest] capture error: ${err.message}`);
+      sendJson(res, 500, { error: err.message });
+    }
+    return;
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // ── MCP protocol on /mcp ──────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════
+
+  if (pathname !== "/mcp") {
     sendJson(res, 404, { error: "Not found" });
     return;
   }
 
-  if (!checkAuth(req, res, url)) return;
-
-  const method = req.method;
-
-  // ---------- POST ----------
+  // ---------- POST /mcp ----------
   if (method === "POST") {
     let body;
     try {
@@ -103,14 +301,12 @@ const httpServer = http.createServer(async (req, res) => {
     const sessionId = req.headers["mcp-session-id"];
 
     if (sessionId && sessions.has(sessionId)) {
-      // Existing session — refresh activity timestamp
       const session = sessions.get(sessionId);
       session.lastActivity = Date.now();
       await session.transport.handleRequest(req, res, body);
       return;
     }
 
-    // Stale session ID — tell the client the session is gone
     if (sessionId && !sessions.has(sessionId) && !isInitializeRequest(body)) {
       console.error(`[mcp-http] Rejected stale session: ${sessionId}`);
       sendJson(res, 404, {
@@ -122,7 +318,6 @@ const httpServer = http.createServer(async (req, res) => {
     }
 
     if (isInitializeRequest(body)) {
-      // New session (or re-init after stale session)
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (sid) => {
@@ -139,7 +334,7 @@ const httpServer = http.createServer(async (req, res) => {
         }
       };
 
-      const mcpServer = createServer();
+      const mcpServer = createMcpServer();
       await mcpServer.connect(transport);
       await transport.handleRequest(req, res, body);
       return;
@@ -153,7 +348,7 @@ const httpServer = http.createServer(async (req, res) => {
     return;
   }
 
-  // ---------- GET (SSE stream) ----------
+  // ---------- GET /mcp (SSE stream) ----------
   if (method === "GET") {
     const sessionId = req.headers["mcp-session-id"];
     if (!sessionId || !sessions.has(sessionId)) {
@@ -166,7 +361,7 @@ const httpServer = http.createServer(async (req, res) => {
     return;
   }
 
-  // ---------- DELETE (session termination) ----------
+  // ---------- DELETE /mcp (session termination) ----------
   if (method === "DELETE") {
     const sessionId = req.headers["mcp-session-id"];
     if (!sessionId || !sessions.has(sessionId)) {
@@ -182,16 +377,18 @@ const httpServer = http.createServer(async (req, res) => {
 });
 
 httpServer.listen(PORT, "0.0.0.0", () => {
-  console.error(`[mcp-http] xauusd-screener MCP HTTP server listening on 0.0.0.0:${PORT}`);
+  console.error(`[mcp-http] xauusd-screener listening on 0.0.0.0:${PORT}`);
+  console.error(`[mcp-http] MCP endpoint: /mcp`);
+  console.error(`[mcp-http] REST endpoints: /capture-charts, /config`);
+  console.error(`[mcp-http] OpenAPI schema: ${BASE_URL}/openapi.json`);
+  console.error(`[mcp-http] Auth: ${AUTH_TOKEN ? "enabled" : "DISABLED"}`);
 });
 
 // Graceful shutdown
 process.on("SIGINT", async () => {
   console.error("[mcp-http] Shutting down...");
   for (const [sid, { transport }] of sessions) {
-    try {
-      await transport.close();
-    } catch (e) {
+    try { await transport.close(); } catch (e) {
       console.error(`[mcp-http] Error closing session ${sid}:`, e);
     }
   }
