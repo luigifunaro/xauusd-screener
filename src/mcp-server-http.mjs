@@ -27,6 +27,8 @@ if (!AUTH_TOKEN) {
   console.error("[mcp-http] WARNING: MCP_AUTH_TOKEN not set — server is unprotected!");
 }
 
+
+
 // ── MCP session management ─────────────────────────────────────────
 
 const sessions = new Map();
@@ -142,7 +144,7 @@ const OPENAPI_SCHEMA = {
                         properties: {
                           timeframe: { type: "string" },
                           label: { type: "string" },
-                          image_base64: { type: "string", description: "Screenshot PNG codificato in base64" },
+                          image_url: { type: "string", format: "uri" },
                         },
                       },
                     },
@@ -231,10 +233,11 @@ const httpServer = http.createServer(async (req, res) => {
     return;
   }
 
-  // ── GET /screenshots/:filename — serve images, no auth ────────────
+  // ── GET /screenshots/... — serve images, no auth ─────────────────
   if (pathname.startsWith("/screenshots/") && method === "GET") {
-    const filename = path.basename(pathname);
-    const filePath = path.join(SCREENSHOTS_DIR, filename);
+    // Support /screenshots/cache/file.png and /screenshots/file.png
+    const relative = pathname.replace("/screenshots/", "");
+    const filePath = path.join(SCREENSHOTS_DIR, ...relative.split("/").map((s) => path.basename(s)));
     if (!fs.existsSync(filePath)) {
       sendJson(res, 404, { error: "Image not found" });
       return;
@@ -262,28 +265,31 @@ const httpServer = http.createServer(async (req, res) => {
   // ── POST /capture-charts — REST endpoint ──────────────────────────
   if (pathname === "/capture-charts" && method === "POST") {
     let body;
-    try {
-      body = await readBody(req);
-    } catch {
-      sendJson(res, 400, { error: "Invalid JSON body" });
-      return;
-    }
+    try { body = await readBody(req); } catch { body = {}; }
 
     const { timeframes } = body;
     console.error(`[rest] capture-charts called, timeframes=${timeframes || "all"}`);
 
     try {
-      const results = await capture({
+      const files = await capture({
         timeframes,
         viewport: { width: 1280, height: 800 },
-        returnBuffers: true,
+        returnBuffers: false,
       });
 
-      const charts = results.map((r) => ({
-        timeframe: r.timeframe,
-        label: r.label,
-        image_base64: r.buffer.toString("base64"),
-      }));
+      const charts = files.map((filePath) => {
+        const fname = path.basename(filePath);
+        const parts = fname.split("_");
+        const tf = parts[1] || "";
+        const tfConfig = config.timeframes.find(
+          (t) => t.filename.toUpperCase() === tf.toUpperCase()
+        );
+        return {
+          timeframe: tf,
+          label: tfConfig ? tfConfig.label : tf,
+          image_url: `${BASE_URL}/screenshots/${fname}`,
+        };
+      });
 
       sendJson(res, 200, {
         symbol: config.symbol,
