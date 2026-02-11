@@ -142,7 +142,7 @@ const OPENAPI_SCHEMA = {
                         properties: {
                           timeframe: { type: "string" },
                           label: { type: "string" },
-                          image_url: { type: "string", format: "uri" },
+                          image_base64: { type: "string", description: "Screenshot PNG codificato in base64" },
                         },
                       },
                     },
@@ -273,25 +273,17 @@ const httpServer = http.createServer(async (req, res) => {
     console.error(`[rest] capture-charts called, timeframes=${timeframes || "all"}`);
 
     try {
-      const files = await capture({
+      const results = await capture({
         timeframes,
         viewport: { width: 1280, height: 800 },
-        returnBuffers: false,
+        returnBuffers: true,
       });
 
-      const charts = files.map((filePath) => {
-        const fname = path.basename(filePath);
-        const parts = fname.split("_");
-        const tf = parts[1] || "";
-        const tfConfig = config.timeframes.find(
-          (t) => t.filename.toUpperCase() === tf.toUpperCase()
-        );
-        return {
-          timeframe: tf,
-          label: tfConfig ? tfConfig.label : tf,
-          image_url: `${BASE_URL}/screenshots/${fname}`,
-        };
-      });
+      const charts = results.map((r) => ({
+        timeframe: r.timeframe,
+        label: r.label,
+        image_base64: r.buffer.toString("base64"),
+      }));
 
       sendJson(res, 200, {
         symbol: config.symbol,
