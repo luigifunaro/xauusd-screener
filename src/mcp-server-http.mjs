@@ -169,7 +169,37 @@ const OPENAPI_SCHEMA = {
         responses: {
           200: {
             description: "Configurazione corrente",
-            content: { "application/json": { schema: { type: "object" } } },
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    symbol: { type: "string" },
+                    timeframes: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          value: { type: "string" },
+                          label: { type: "string" },
+                          filename: { type: "string" },
+                        },
+                      },
+                    },
+                    studies: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          id: { type: "string" },
+                          plotName: { type: "string" },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
           },
         },
       },
