@@ -115,7 +115,8 @@ async function capture(options = {}) {
       timezoneId: 'Europe/Rome',
     });
 
-    for (const tf of selectedTimeframes) {
+    // Capture all timeframes in parallel
+    const captureOne = async (tf) => {
       const page = await context.newPage();
       page.on('dialog', (d) => d.dismiss());
 
@@ -130,34 +131,29 @@ async function capture(options = {}) {
         console.error(`  Warning: canvas not found for ${tf.label}, capturing anyway`);
       }
 
-      // Wait for chart to be fully ready before injecting studies
       await page.waitForTimeout(config.waitTime);
 
-      // Dismiss any popups
       await page.evaluate(() => {
         document.querySelectorAll('[class*="close"], [class*="dismiss"]').forEach((el) => {
           try { el.click(); } catch (e) {}
         });
       });
 
-      // Inject SMA and EMA studies with custom inputs and styles
       const studyResult = await injectStudies(page, config.studies);
       if (studyResult.ok && studyResult.results) {
         for (const r of studyResult.results) {
           if (r.ok) {
-            console.error(`  Added: ${r.id}`);
+            console.error(`  Added: ${r.id} (${tf.label})`);
           } else {
-            console.error(`  Warning: ${r.id} failed - ${r.error}`);
+            console.error(`  Warning: ${r.id} failed on ${tf.label} - ${r.error}`);
           }
         }
       } else {
-        console.error(`  Warning: study injection failed - ${studyResult.error || 'unknown'}`);
+        console.error(`  Warning: study injection failed on ${tf.label} - ${studyResult.error || 'unknown'}`);
       }
 
-      // Wait for studies to render
       await page.waitForTimeout(config.studyWaitTime);
 
-      // Dismiss any error popups before screenshot
       await page.evaluate(() => {
         document.querySelectorAll('button').forEach((btn) => {
           if (btn.textContent.includes('Ho capito') || btn.textContent.includes('OK')) {
@@ -167,19 +163,27 @@ async function capture(options = {}) {
       });
       await page.waitForTimeout(300);
 
+      let result;
       if (returnBuffers) {
         const buffer = await page.screenshot();
-        results.push({ timeframe: tf.filename, label: tf.label, buffer });
+        result = { timeframe: tf.filename, label: tf.label, buffer };
         console.error(`  Captured: ${tf.label}`);
       } else {
         const filename = `${config.symbol}_${tf.filename}_${ts}.png`;
         const filePath = path.join(screenshotsDir, filename);
         await captureWithRetry(page, filePath, config.maxRetries);
-        results.push(filePath);
+        result = filePath;
         console.error(`  Saved: ${filename}`);
       }
 
       await page.close();
+      return result;
+    };
+
+    const settled = await Promise.allSettled(selectedTimeframes.map(captureOne));
+    for (const r of settled) {
+      if (r.status === 'fulfilled') results.push(r.value);
+      else console.error(`  Error: ${r.reason?.message || r.reason}`);
     }
   } finally {
     if (browser) await browser.close();
