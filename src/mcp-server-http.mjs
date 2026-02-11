@@ -7,13 +7,28 @@ import { registerTools } from "./mcp-tools.mjs";
 
 const PORT = parseInt(process.env.MCP_PORT || "3001", 10);
 const AUTH_TOKEN = process.env.MCP_AUTH_TOKEN;
+const SESSION_TTL_MS = parseInt(process.env.MCP_SESSION_TTL || "600000", 10); // 10 min default
 
 if (!AUTH_TOKEN) {
   console.error("[mcp-http] WARNING: MCP_AUTH_TOKEN not set — server is unprotected!");
 }
 
-// Session map: sessionId -> { transport, server }
+// Session map: sessionId -> { transport, server, lastActivity }
 const sessions = new Map();
+
+// Reap idle sessions every 60s
+setInterval(() => {
+  const now = Date.now();
+  for (const [sid, session] of sessions) {
+    if (now - session.lastActivity > SESSION_TTL_MS) {
+      console.error(`[mcp-http] Reaping idle session: ${sid} (inactive ${Math.round((now - session.lastActivity) / 1000)}s)`);
+      try {
+        session.transport.close();
+      } catch {}
+      sessions.delete(sid);
+    }
+  }
+}, 60_000);
 
 function createServer() {
   const server = new McpServer({
@@ -88,9 +103,10 @@ const httpServer = http.createServer(async (req, res) => {
     const sessionId = req.headers["mcp-session-id"];
 
     if (sessionId && sessions.has(sessionId)) {
-      // Existing session
-      const { transport } = sessions.get(sessionId);
-      await transport.handleRequest(req, res, body);
+      // Existing session — refresh activity timestamp
+      const session = sessions.get(sessionId);
+      session.lastActivity = Date.now();
+      await session.transport.handleRequest(req, res, body);
       return;
     }
 
@@ -100,7 +116,7 @@ const httpServer = http.createServer(async (req, res) => {
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (sid) => {
           console.error(`[mcp-http] Session initialized: ${sid}`);
-          sessions.set(sid, { transport, server: mcpServer });
+          sessions.set(sid, { transport, server: mcpServer, lastActivity: Date.now() });
         },
       });
 
@@ -133,8 +149,9 @@ const httpServer = http.createServer(async (req, res) => {
       sendJson(res, 400, { error: "Invalid or missing session ID" });
       return;
     }
-    const { transport } = sessions.get(sessionId);
-    await transport.handleRequest(req, res);
+    const session = sessions.get(sessionId);
+    session.lastActivity = Date.now();
+    await session.transport.handleRequest(req, res);
     return;
   }
 
@@ -145,8 +162,8 @@ const httpServer = http.createServer(async (req, res) => {
       sendJson(res, 400, { error: "Invalid or missing session ID" });
       return;
     }
-    const { transport } = sessions.get(sessionId);
-    await transport.handleRequest(req, res);
+    const session = sessions.get(sessionId);
+    await session.transport.handleRequest(req, res);
     return;
   }
 
