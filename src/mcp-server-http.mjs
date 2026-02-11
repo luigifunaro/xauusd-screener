@@ -110,8 +110,19 @@ const httpServer = http.createServer(async (req, res) => {
       return;
     }
 
-    if (!sessionId && isInitializeRequest(body)) {
-      // New session
+    // Stale session ID — tell the client the session is gone
+    if (sessionId && !sessions.has(sessionId) && !isInitializeRequest(body)) {
+      console.error(`[mcp-http] Rejected stale session: ${sessionId}`);
+      sendJson(res, 404, {
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "Session not found" },
+        id: null,
+      });
+      return;
+    }
+
+    if (isInitializeRequest(body)) {
+      // New session (or re-init after stale session)
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (sid) => {
