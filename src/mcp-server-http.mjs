@@ -127,6 +127,7 @@ const OPENAPI_SCHEMA = {
     "/capture-charts": {
       post: {
         operationId: "captureCharts",
+        "x-openai-isConsequential": false,
         summary: "Cattura screenshot dei grafici XAUUSD su uno o più timeframe",
         requestBody: {
           required: false,
@@ -190,6 +191,7 @@ const OPENAPI_SCHEMA = {
     "/config": {
       get: {
         operationId: "getConfig",
+        "x-openai-isConsequential": false,
         summary: "Restituisce la configurazione corrente (simbolo, timeframe, studi)",
         responses: {
           200: {
