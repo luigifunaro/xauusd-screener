@@ -84,6 +84,7 @@ async function capture(options = {}) {
     timeframes: tfFilter,
     viewport,
     returnBuffers = false,
+    screenshotOptions = {},
   } = options;
 
   const screenshotsDir = path.resolve(__dirname, '..', config.screenshotsDir);
@@ -163,11 +164,15 @@ async function capture(options = {}) {
       });
       await page.waitForTimeout(300);
 
+      // Merge screenshot options (supports type: 'jpeg', quality: 0-100)
+      const ssOpts = { ...screenshotOptions };
+
       let result;
       if (returnBuffers) {
-        const buffer = await page.screenshot();
-        result = { timeframe: tf.filename, label: tf.label, buffer };
-        console.error(`  Captured: ${tf.label}`);
+        const buffer = await page.screenshot(ssOpts);
+        const ext = ssOpts.type === 'jpeg' ? 'jpg' : 'png';
+        result = { timeframe: tf.filename, label: tf.label, buffer, ext };
+        console.error(`  Captured: ${tf.label} (${ext}, ${Math.round(buffer.length / 1024)}KB)`);
       } else {
         const filename = `${config.symbol}_${tf.filename}_${ts}.png`;
         const filePath = path.join(screenshotsDir, filename);
