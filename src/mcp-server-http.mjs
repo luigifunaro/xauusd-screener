@@ -139,18 +139,17 @@ const OPENAPI_SCHEMA = {
                     studies: { type: "array", items: { type: "string" } },
                     charts: {
                       type: "array",
-                      description: "Array di grafici catturati. Ogni elemento contiene URL e base64 dell'immagine JPEG.",
+                      description: "Array di grafici catturati con URL immagine JPEG.",
                       items: {
                         type: "object",
                         properties: {
                           timeframe: { type: "string", description: "Codice timeframe (es. 1H, 4H)" },
                           label: { type: "string", description: "Etichetta leggibile (es. 1 Ora)" },
                           image_url: { type: "string", format: "uri", description: "URL pubblico dell'immagine JPEG. IMPORTANTE: mostra SEMPRE ogni immagine inline usando markdown ![label](image_url)" },
-                          image_base64: { type: "string", description: "Immagine JPEG codificata in base64 come data URI" },
                         },
                       },
                     },
-                    _display_hint: { type: "string", description: "Istruzione per l'assistente su come visualizzare i risultati" },
+                    _instruction: { type: "string", description: "Istruzione per l'assistente su come visualizzare i risultati" },
                   },
                 },
               },
@@ -275,7 +274,7 @@ const httpServer = http.createServer(async (req, res) => {
     console.error(`[rest] capture-charts called, timeframes=${timeframes || "all"}`);
 
     try {
-      // Use JPEG for smaller payloads (ChatGPT-friendly)
+      // JPEG + smaller viewport to keep image URLs lightweight for ChatGPT
       const results = await capture({
         timeframes,
         viewport: { width: 1280, height: 800 },
@@ -285,17 +284,14 @@ const httpServer = http.createServer(async (req, res) => {
 
       const charts = [];
       for (const r of results) {
-        // Save to disk for URL access
         const fname = `${config.symbol}_${r.timeframe}_${new Date().toISOString().replace(/[:.]/g, "-")}.jpg`;
         const filePath = path.join(SCREENSHOTS_DIR, fname);
         fs.writeFileSync(filePath, r.buffer);
 
-        const b64 = r.buffer.toString("base64");
         charts.push({
           timeframe: r.timeframe,
           label: r.label,
           image_url: `${BASE_URL}/screenshots/${fname}`,
-          image_base64: `data:image/jpeg;base64,${b64}`,
         });
         console.error(`[rest] ${r.label}: ${Math.round(r.buffer.length / 1024)}KB`);
       }
@@ -304,7 +300,7 @@ const httpServer = http.createServer(async (req, res) => {
         symbol: config.symbol,
         studies: config.studies.map((s) => `${s.id} (length=${s.inputs.length})`),
         charts,
-        _display_hint: "Per ogni chart, mostra l'immagine usando il formato markdown: ![LABEL](image_url). Poi analizza visivamente ogni grafico.",
+        _instruction: "IMPORTANTE: mostra OGNI immagine inline con markdown ![XAUUSD LABEL](image_url) e poi analizza il grafico. Non mostrare solo i link.",
       });
     } catch (err) {
       console.error(`[rest] capture error: ${err.message}`);
