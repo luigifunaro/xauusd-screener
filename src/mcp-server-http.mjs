@@ -23,10 +23,31 @@ const BASE_URL = (process.env.REST_BASE_URL || `http://localhost:${PORT}`).repla
 const SCREENSHOTS_DIR = path.resolve(__dirname, "..", "screenshots");
 fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
 
+const SCREENSHOTS_TTL_MS = parseInt(process.env.SCREENSHOTS_TTL || "1800000", 10); // 30 min default
+
 if (!AUTH_TOKEN) {
   console.error("[mcp-http] WARNING: MCP_AUTH_TOKEN not set — server is unprotected!");
 }
 
+// ── Screenshot cleanup ───────────────────────────────────────────────
+setInterval(() => {
+  const now = Date.now();
+  let cleaned = 0;
+  try {
+    for (const file of fs.readdirSync(SCREENSHOTS_DIR)) {
+      if (!file.endsWith(".png") && !file.endsWith(".jpg") && !file.endsWith(".jpeg")) continue;
+      const filePath = path.join(SCREENSHOTS_DIR, file);
+      const { mtimeMs } = fs.statSync(filePath);
+      if (now - mtimeMs > SCREENSHOTS_TTL_MS) {
+        fs.unlinkSync(filePath);
+        cleaned++;
+      }
+    }
+  } catch (e) {
+    console.error(`[cleanup] Error: ${e.message}`);
+  }
+  if (cleaned > 0) console.error(`[cleanup] Removed ${cleaned} expired screenshot(s)`);
+}, 60_000);
 
 
 // ── MCP session management ─────────────────────────────────────────
