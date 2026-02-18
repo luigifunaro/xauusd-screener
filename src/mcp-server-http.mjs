@@ -223,13 +223,14 @@ const httpServer = http.createServer(async (req, res) => {
   const pathname = url.pathname;
   const method = req.method;
 
-  // CORS preflight
+  // CORS — set on every response
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id");
+  res.setHeader("Access-Control-Expose-Headers", "mcp-session-id");
+
   if (method === "OPTIONS") {
-    res.writeHead(204, {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization, mcp-session-id",
-    });
+    res.writeHead(204);
     res.end();
     return;
   }
