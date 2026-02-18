@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { registerTools } from "./mcp-tools.mjs";
 
@@ -333,7 +334,49 @@ const httpServer = http.createServer(async (req, res) => {
   }
 
   // ══════════════════════════════════════════════════════════════════
-  // ── MCP protocol on /mcp ──────────────────────────────────────────
+  // ── Deprecated SSE transport on /sse + /messages ────────────────
+  // ══════════════════════════════════════════════════════════════════
+
+  if (pathname === "/sse" && method === "GET") {
+    console.error("[mcp-sse] New SSE connection");
+    const transport = new SSEServerTransport("/messages", res);
+    const mcpServer = createMcpServer();
+
+    sessions.set(transport.sessionId, {
+      transport,
+      server: mcpServer,
+      lastActivity: Date.now(),
+      type: "sse",
+    });
+
+    res.on("close", () => {
+      console.error(`[mcp-sse] SSE connection closed: ${transport.sessionId}`);
+      sessions.delete(transport.sessionId);
+    });
+
+    await mcpServer.connect(transport);
+    await transport.start();
+    return;
+  }
+
+  if (pathname === "/messages" && method === "POST") {
+    const sessionId = url.searchParams.get("sessionId");
+    const session = sessionId && sessions.get(sessionId);
+
+    if (!session || !(session.transport instanceof SSEServerTransport)) {
+      sendJson(res, 400, { error: "Invalid or missing SSE session ID" });
+      return;
+    }
+
+    session.lastActivity = Date.now();
+    let body;
+    try { body = await readBody(req); } catch { body = undefined; }
+    await session.transport.handlePostMessage(req, res, body);
+    return;
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // ── MCP Streamable HTTP on /mcp ─────────────────────────────────
   // ══════════════════════════════════════════════════════════════════
 
   if (pathname !== "/mcp") {
@@ -435,9 +478,10 @@ const httpServer = http.createServer(async (req, res) => {
 
 httpServer.listen(PORT, "0.0.0.0", () => {
   console.error(`[mcp-http] xauusd-screener listening on 0.0.0.0:${PORT}`);
-  console.error(`[mcp-http] MCP endpoint: /mcp`);
-  console.error(`[mcp-http] REST endpoints: /capture-charts, /config`);
-  console.error(`[mcp-http] OpenAPI schema: ${BASE_URL}/openapi.json`);
+  console.error(`[mcp-http] MCP Streamable HTTP: /mcp`);
+  console.error(`[mcp-http] MCP SSE (legacy):    /sse + /messages`);
+  console.error(`[mcp-http] REST endpoints:       /capture-charts, /config`);
+  console.error(`[mcp-http] OpenAPI schema:       ${BASE_URL}/openapi.json`);
   console.error(`[mcp-http] Auth: ${AUTH_TOKEN ? "enabled" : "DISABLED"}`);
 });
 
