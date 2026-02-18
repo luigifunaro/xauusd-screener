@@ -63,7 +63,7 @@ setInterval(() => {
 
 function createMcpServer() {
   const server = new McpServer({ name: "xauusd-screener", version: "1.0.0" });
-  registerTools(server);
+  registerTools(server, { baseUrl: BASE_URL, screenshotsDir: SCREENSHOTS_DIR });
   return server;
 }
 
