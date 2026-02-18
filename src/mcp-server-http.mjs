@@ -17,7 +17,6 @@ const config = require("./config.js");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.MCP_PORT || "3001", 10);
-const AUTH_TOKEN = process.env.MCP_AUTH_TOKEN;
 const SESSION_TTL_MS = parseInt(process.env.MCP_SESSION_TTL || "600000", 10);
 const BASE_URL = (process.env.REST_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
 
@@ -25,10 +24,6 @@ const SCREENSHOTS_DIR = path.resolve(__dirname, "..", "screenshots");
 fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
 
 const SCREENSHOTS_TTL_MS = parseInt(process.env.SCREENSHOTS_TTL || "1800000", 10); // 30 min default
-
-if (!AUTH_TOKEN) {
-  console.error("[mcp-http] WARNING: MCP_AUTH_TOKEN not set — server is unprotected!");
-}
 
 // ── Screenshot cleanup ───────────────────────────────────────────────
 setInterval(() => {
@@ -98,20 +93,6 @@ function sendJson(res, status, body) {
     "Content-Length": Buffer.byteLength(payload),
   });
   res.end(payload);
-}
-
-function checkAuth(req, res, url) {
-  if (!AUTH_TOKEN) return true;
-  const header = req.headers["authorization"];
-  if (header === `Bearer ${AUTH_TOKEN}`) return true;
-  const queryToken = url.searchParams.get("token");
-  if (queryToken === AUTH_TOKEN) return true;
-  sendJson(res, 401, {
-    jsonrpc: "2.0",
-    error: { code: -32000, message: "Unauthorized" },
-    id: null,
-  });
-  return false;
 }
 
 // ── OpenAPI schema (for ChatGPT Actions) ────────────────────────────
@@ -322,9 +303,6 @@ const httpServer = http.createServer(async (req, res) => {
     return;
   }
 
-  // ── auth required below ───────────────────────────────────────────
-  if (!checkAuth(req, res, url)) return;
-
   // ── GET /config — REST endpoint ───────────────────────────────────
   if (pathname === "/config" && method === "GET") {
     sendJson(res, 200, config);
@@ -376,7 +354,7 @@ const httpServer = http.createServer(async (req, res) => {
   }
 
   // ══════════════════════════════════════════════════════════════════
-  // ── MCP Streamable HTTP on /mcp (auth required) ─────────────────
+  // ── MCP Streamable HTTP on /mcp ─────────────────────────────────
   // ══════════════════════════════════════════════════════════════════
 
   if (pathname !== "/mcp") {
@@ -482,7 +460,6 @@ httpServer.listen(PORT, "0.0.0.0", () => {
   console.error(`[mcp-http] MCP SSE (legacy):    /sse + /messages`);
   console.error(`[mcp-http] REST endpoints:       /capture-charts, /config`);
   console.error(`[mcp-http] OpenAPI schema:       ${BASE_URL}/openapi.json`);
-  console.error(`[mcp-http] Auth: ${AUTH_TOKEN ? "enabled" : "DISABLED"}`);
 });
 
 // Graceful shutdown
