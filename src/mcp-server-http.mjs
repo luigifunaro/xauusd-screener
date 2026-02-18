@@ -280,6 +280,48 @@ const httpServer = http.createServer(async (req, res) => {
     return;
   }
 
+  // ══════════════════════════════════════════════════════════════════
+  // ── SSE transport (no auth) ─────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════
+
+  if (pathname === "/sse" && method === "GET") {
+    console.error("[mcp-sse] New SSE connection");
+    const transport = new SSEServerTransport("/messages", res);
+    const mcpServer = createMcpServer();
+
+    sessions.set(transport.sessionId, {
+      transport,
+      server: mcpServer,
+      lastActivity: Date.now(),
+      type: "sse",
+    });
+
+    res.on("close", () => {
+      console.error(`[mcp-sse] SSE connection closed: ${transport.sessionId}`);
+      sessions.delete(transport.sessionId);
+    });
+
+    await mcpServer.connect(transport);
+    await transport.start();
+    return;
+  }
+
+  if (pathname === "/messages" && method === "POST") {
+    const sessionId = url.searchParams.get("sessionId");
+    const session = sessionId && sessions.get(sessionId);
+
+    if (!session || !(session.transport instanceof SSEServerTransport)) {
+      sendJson(res, 400, { error: "Invalid or missing SSE session ID" });
+      return;
+    }
+
+    session.lastActivity = Date.now();
+    let body;
+    try { body = await readBody(req); } catch { body = undefined; }
+    await session.transport.handlePostMessage(req, res, body);
+    return;
+  }
+
   // ── auth required below ───────────────────────────────────────────
   if (!checkAuth(req, res, url)) return;
 
@@ -334,49 +376,7 @@ const httpServer = http.createServer(async (req, res) => {
   }
 
   // ══════════════════════════════════════════════════════════════════
-  // ── Deprecated SSE transport on /sse + /messages ────────────────
-  // ══════════════════════════════════════════════════════════════════
-
-  if (pathname === "/sse" && method === "GET") {
-    console.error("[mcp-sse] New SSE connection");
-    const transport = new SSEServerTransport("/messages", res);
-    const mcpServer = createMcpServer();
-
-    sessions.set(transport.sessionId, {
-      transport,
-      server: mcpServer,
-      lastActivity: Date.now(),
-      type: "sse",
-    });
-
-    res.on("close", () => {
-      console.error(`[mcp-sse] SSE connection closed: ${transport.sessionId}`);
-      sessions.delete(transport.sessionId);
-    });
-
-    await mcpServer.connect(transport);
-    await transport.start();
-    return;
-  }
-
-  if (pathname === "/messages" && method === "POST") {
-    const sessionId = url.searchParams.get("sessionId");
-    const session = sessionId && sessions.get(sessionId);
-
-    if (!session || !(session.transport instanceof SSEServerTransport)) {
-      sendJson(res, 400, { error: "Invalid or missing SSE session ID" });
-      return;
-    }
-
-    session.lastActivity = Date.now();
-    let body;
-    try { body = await readBody(req); } catch { body = undefined; }
-    await session.transport.handlePostMessage(req, res, body);
-    return;
-  }
-
-  // ══════════════════════════════════════════════════════════════════
-  // ── MCP Streamable HTTP on /mcp ─────────────────────────────────
+  // ── MCP Streamable HTTP on /mcp (auth required) ─────────────────
   // ══════════════════════════════════════════════════════════════════
 
   if (pathname !== "/mcp") {
