@@ -283,7 +283,6 @@ const httpServer = http.createServer(async (req, res) => {
     });
 
     await mcpServer.connect(transport);
-    await transport.start();
     return;
   }
 
